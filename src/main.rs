@@ -1,75 +1,77 @@
+mod commands;
 mod config;
+mod error;
 
-use poise::serenity_prelude as serenity;
-use std::{
-    collections::HashMap,
-    sync::Mutex,
-};
+pub use self::error::{Error, Result};
+
+use chrono::Local;
+use clap::Parser;
 use config::BotConfig;
+use log::{debug, info};
+use poise::serenity_prelude as serenity;
+use std::io::Write;
 
-// Types used by all command functions
-type Error = Box<dyn std::error::Error + Send + Sync>;
+struct Data {}
 type Context<'a> = poise::Context<'a, Data, Error>;
 
-// Custom user data passed to all command functions
-pub struct Data {
-    votes: Mutex<HashMap<String, u32>>,
-}
-
-async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
-    // This is our custom error handler
-    // They are many errors that can occur, so we only handle the ones we want to customize
-    // and forward the rest to the default handler
-    match error {
-        poise::FrameworkError::Setup { error, .. } => panic!("Failed to start bot: {:?}", error),
-        poise::FrameworkError::Command { error, ctx, .. } => {
-            println!("Error in command `{}`: {:?}", ctx.command().name, error,);
-        }
-        error => {
-            if let Err(e) = poise::builtins::on_error(error).await {
-                println!("Error while handling error: {}", e)
-            }
-        }
-    }
+#[derive(Debug, Parser)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Path to config file
+    #[arg(short, long)]
+    config: Option<String>,
+    /// Load config and exit
+    #[arg(short, long)]
+    dry_run: bool,
 }
 
 #[tokio::main]
-async fn main() {
-    env_logger::init();
+async fn main() -> Result<()> {
+    let args = Args::parse();
+
+    env_logger::Builder::from_env("BOT_LOG")
+        .format(|buf, record| {
+            let style = buf.default_level_style(record.level());
+            writeln!(
+                buf,
+                "{} {style}{}{style:#} [{}] {}",
+                Local::now().format("%Y-%m-%d %H:%M:%S"),
+                record.level(),
+                record.target(),
+                record.args()
+            )
+        })
+        .init();
+
+    let config = BotConfig::load(args.config.as_deref())?;
+    info!("{}", config);
+
+    if args.dry_run {
+        return Ok(());
+    }
 
     // FrameworkOptions contains all of poise's configuration option in one struct
     // Every option can be omitted to use its default value
     let options = poise::FrameworkOptions {
-        commands: vec![],
-        // The global error handler for all error cases that may occur
-        on_error: |error| Box::pin(on_error(error)),
+        commands: vec![commands::simple::age()],
         // This code is run before every command
         pre_command: |ctx| {
             Box::pin(async move {
-                println!("Executing command {}...", ctx.command().qualified_name);
+                info!("Executing command {}...", ctx.command().qualified_name);
             })
         },
         // This code is run after a command if it was successful (returned Ok)
         post_command: |ctx| {
             Box::pin(async move {
-                println!("Executed command {}!", ctx.command().qualified_name);
+                info!("Executed command {}!", ctx.command().qualified_name);
             })
         },
-        // Every command invocation must pass this check to continue execution
-        command_check: Some(|ctx| {
-            Box::pin(async move {
-                if ctx.author().id == 123456789 {
-                    return Ok(false);
-                }
-                Ok(true)
-            })
-        }),
         // Enforce command checks even for owners (enforced by default)
         // Set to true to bypass checks, which is useful for testing
-        skip_checks_for_owners: false,
+        skip_checks_for_owners: config.debug,
         event_handler: |_ctx, event, _framework, _data| {
             Box::pin(async move {
-                println!(
+                info!(
                     "Got an event in event handler: {:?}",
                     event.snake_case_name()
                 );
@@ -82,29 +84,29 @@ async fn main() {
     let framework = poise::Framework::builder()
         .setup(move |ctx, _ready, framework| {
             Box::pin(async move {
-                println!("Logged in as {}", _ready.user.name);
-                poise::builtins::register_globally(ctx, &framework.options().commands).await?;
-                Ok(Data {
-                    votes: Mutex::new(HashMap::new()),
-                })
+                info!("Logged in as {}", _ready.user.name);
+                for guild in _ready.guilds.iter() {
+                    poise::builtins::register_in_guild(
+                        ctx,
+                        &framework.options().commands,
+                        guild.id,
+                    )
+                    .await?;
+                    debug!("registered commands in guild {}", guild.id);
+                }
+                Ok(Data {})
             })
         })
         .options(options)
         .build();
 
-    let config = match BotConfig::load(None) {
-        Ok(config) =>  config,
-        Err(err) => {
-            panic!("Error loading config: {:?}", err)
-        }
-    };
-
     let intents =
         serenity::GatewayIntents::non_privileged() | serenity::GatewayIntents::MESSAGE_CONTENT;
 
-    let client = serenity::ClientBuilder::new(config.token, intents)
+    let mut client = serenity::ClientBuilder::new(config.token, intents)
         .framework(framework)
-        .await;
+        .await?;
 
-    client.unwrap().start().await.unwrap()
+    client.start().await?;
+    Ok(())
 }

@@ -1,3 +1,5 @@
+config.toml
+
 # Environment files
 .env
 
