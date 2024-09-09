@@ -25,6 +25,33 @@ struct Args {
     dry_run: bool,
 }
 
+async fn event_handler(
+    ctx: &serenity::Context,
+    event: &serenity::FullEvent,
+    _framework: poise::FrameworkContext<'_, Data, Error>,
+    data: &Data,
+) -> Result<Error> {
+    match event {
+        serenity::FullEvent::Ready { data_about_bot, .. } => {
+            println!("Logged in as {}", data_about_bot.user.name);
+        }
+        serenity::FullEvent::InteractionCreate { interaction } => {
+            match interation {
+                serenity::model::application::Interacton::Command {
+                    let commands = ctx.framework().guild().unwrap().get_commands(ctx)?;
+                    for command in commands {
+                        if command.name == interaction.data.name {
+                            
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -53,7 +80,7 @@ async fn main() -> Result<()> {
     // FrameworkOptions contains all of poise's configuration option in one struct
     // Every option can be omitted to use its default value
     let options = poise::FrameworkOptions {
-        commands: vec![commands::simple::age()],
+        commands: vec![commands::simple::age(), commands::custom::command()],
         // This code is run before every command
         pre_command: |ctx| {
             Box::pin(async move {
